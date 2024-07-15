@@ -71,6 +71,7 @@ If IS-CODE-REWRITE is non-nil, use a system prompt for code rewriting."
     (setq claude-current-request
           (url-retrieve "https://api.anthropic.com/v1/messages"
                         (lambda (status)
+                          ;; Add error handling here?
                           ;; (message "claud-response-callback %s" status))
                           )
                         nil
