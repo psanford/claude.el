@@ -40,7 +40,10 @@
 
 (defun claude-get-buffer-content ()
   "Get the content of the current buffer."
-  (buffer-substring-no-properties (point-min) (point-max)))
+  (encode-coding-string
+   (buffer-substring-no-properties (point-min) (point-max))
+   'utf-8))
+
 
 (defun claude-send-request (prompt content &optional is-code-rewrite)
   "Send a request to Claude API with PROMPT and CONTENT.
@@ -56,13 +59,15 @@ If IS-CODE-REWRITE is non-nil, use a system prompt for code rewriting."
               "You are an AI assistant helping to rewrite code in an Emacs buffer. Your response will be directly inserted into the code, replacing the original content. Provide only the modified code without any additional explanations or markdown formatting."
             "You are an AI assistant in an Emacs buffer. You and the user will have a discussion about the contents of this text."))
          (url-request-data
-          (json-encode
-           `((system . ,system-prompt)
-             (model . ,claude-model)
-             (max_tokens . 4096)
-             (stream . t)
-             (messages . [((role . "user")
-                           (content . ,(format "%s\n\nCode or text to modify:\n%s" prompt content)))])))))
+          (encode-coding-string
+           (json-encode
+            `((system . ,system-prompt)
+              (model . ,claude-model)
+              (max_tokens . 4096)
+              (stream . t)
+              (messages . [((role . "user")
+                            (content . ,(format "%s\n\nCode or text to modify:\n%s" prompt content)))])))
+           'utf-8)))
     (setq claude-current-request
           (url-retrieve "https://api.anthropic.com/v1/messages"
                         (lambda (status)
