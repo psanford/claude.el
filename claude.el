@@ -18,7 +18,7 @@
   :type 'string
   :group 'claude)
 
-(defcustom claude-model "claude-3-5-sonnet-20240620"
+(defcustom claude-model "claude-3-5-sonnet-latest"
   "The Claude model to use for chat."
   :type 'string
   :group 'claude)
