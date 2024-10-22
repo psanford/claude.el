@@ -23,8 +23,14 @@
   :type 'string
   :group 'claude)
 
-(defvar claude-buffer "*Claude Chat*"
-  "The name of the buffer for Claude chat.")
+(defcustom claude-include-history t
+  "Whether to include conversation history in subsequent messages."
+  :type 'boolean
+  :group 'claude)
+
+(defvar-local claude-conversation-history nil
+  "Buffer-local variable to store conversation history.
+Each element is a plist with :role and :content keys.")
 
 (defvar claude-current-request nil
   "The current ongoing request to Claude API.")
@@ -44,6 +50,17 @@
    (buffer-substring-no-properties (point-min) (point-max))
    'utf-8))
 
+(defun claude-get-chat-buffer-name (source-buffer)
+  "Get the name of the chat buffer associated with SOURCE-BUFFER."
+  (format "*Claude Chat: %s*" (buffer-name source-buffer)))
+
+(defun claude-get-or-create-chat-buffer (source-buffer)
+  "Get or create a chat buffer for SOURCE-BUFFER."
+  (let ((chat-buffer-name (claude-get-chat-buffer-name source-buffer)))
+    (or (get-buffer chat-buffer-name)
+        (with-current-buffer (get-buffer-create chat-buffer-name)
+          (setq-local claude-conversation-history nil)
+          (current-buffer)))))
 
 (defun claude-send-request (prompt content &optional is-code-rewrite)
   "Send a request to Claude API with PROMPT and CONTENT.
@@ -58,6 +75,12 @@ If IS-CODE-REWRITE is non-nil, use a system prompt for code rewriting."
           (if is-code-rewrite
               "You are an AI assistant helping to rewrite code in an Emacs buffer. Your response will be directly inserted into the code, replacing the original content. Provide only the modified code without any additional explanations or markdown formatting."
             "You are an AI assistant in an Emacs buffer. You and the user will have a discussion about the contents of this text."))
+         (messages (if (and claude-include-history claude-conversation-history (not is-code-rewrite))
+                      (vconcat claude-conversation-history
+                              `[((role . "user")
+                                 (content . ,(format "%s\n\nCode or text to modify:\n%s" prompt content)))])
+                    `[((role . "user")
+                       (content . ,(format "%s\n\nCode or text to modify:\n%s" prompt content)))]))
          (url-request-data
           (encode-coding-string
            (json-encode
@@ -65,8 +88,7 @@ If IS-CODE-REWRITE is non-nil, use a system prompt for code rewriting."
               (model . ,claude-model)
               (max_tokens . 4096)
               (stream . t)
-              (messages . [((role . "user")
-                            (content . ,(format "%s\n\nCode or text to modify:\n%s" prompt content)))])))
+              (messages . ,messages)))
            'utf-8)))
     (setq claude-current-request
           (url-retrieve "https://api.anthropic.com/v1/messages"
@@ -99,13 +121,31 @@ This function is called by the `after-change-functions` hook."
                       ((string= type "text_delta")))
             (if claude-rewrite-region
                 (claude-stream-rewrite-region text)
-              (with-current-buffer (get-buffer-create claude-buffer)
+              (with-current-buffer claude-rewrite-buffer
                 (save-excursion
                   (goto-char (point-max))
                   (insert text))))))
          ((plist-get data :type)
           (when (string= (plist-get data :type) "message_stop")
-            (claude-finish-rewrite))))))))
+            (claude-finish-response))))))))
+
+(defun claude-finish-response ()
+  "Finish processing the response.
+Either finish the rewrite process or update conversation history."
+  (if claude-rewrite-region
+      (claude-finish-rewrite)
+    (with-current-buffer claude-rewrite-buffer
+      ;; Get the response text from the last "Claude: " to the end
+      (save-excursion
+        (goto-char (point-max))
+        (search-backward "\n\nClaude: " nil t)
+        (forward-char 10)
+        (let ((response (buffer-substring-no-properties (point) (point-max))))
+          ;; Add the new messages to history
+          (setq-local claude-conversation-history
+                      (vconcat claude-conversation-history
+                              `[((role . "assistant")
+                                 (content . ,response))])))))))
 
 (defun claude-finish-rewrite ()
   "Finish the rewrite process by removing the overlay."
@@ -152,16 +192,29 @@ This function is called by the `after-change-functions` hook."
       (claude-send-request prompt region-content t))))
 
 (defun claude-prompt (prompt)
-  "Send PROMPT to Claude and display the response."
+  "Send PROMPT to Claude and display the response.
+If called from a chat buffer, continues the conversation in that buffer."
   (interactive "sAsk Claude: ")
   (if (not claude-api-key)
       (message "Please set claude-api-key first")
-    (let ((buffer-content (claude-get-buffer-content)))
-      (with-current-buffer (get-buffer-create claude-buffer)
+    (let* ((source-buf (or (claude-chat-buffer-p) (current-buffer)))
+           (chat-buffer (if (claude-chat-buffer-p)
+                          (current-buffer)
+                        (claude-get-or-create-chat-buffer source-buf)))
+           (buffer-content (with-current-buffer source-buf
+                           (claude-get-buffer-content))))
+      (with-current-buffer chat-buffer
         (goto-char (point-max))
         (insert "\n\nYou: " prompt)
         (insert "\n\nClaude: "))
-      (display-buffer claude-buffer)
+      (setq claude-rewrite-buffer chat-buffer)
+      (display-buffer chat-buffer)
+      ;; Add the user message to history before sending
+      (with-current-buffer chat-buffer
+        (setq-local claude-conversation-history
+                    (vconcat claude-conversation-history
+                            `[((role . "user")
+                               (content . ,prompt))])))
       (claude-send-request prompt buffer-content))))
 
 (defun claude-cancel-request ()
@@ -178,10 +231,19 @@ This function is called by the `after-change-functions` hook."
       (delete-overlay claude-rewrite-overlay)
       (setq claude-rewrite-overlay nil))
     (message "Claude API request cancelled.")
-    (with-current-buffer (get-buffer-create claude-buffer)
-      (goto-char (point-max))
-      (insert "\n\n[Request cancelled]"))))
+    (when claude-rewrite-buffer
+      (with-current-buffer claude-rewrite-buffer
+        (goto-char (point-max))
+        (insert "\n\n[Request cancelled]")))))
+
+(defun claude-chat-buffer-p (&optional buffer)
+  "Return non-nil if BUFFER (or current buffer) is a Claude chat buffer.
+Also returns the source buffer if it is a chat buffer."
+  (let* ((buf (or buffer (current-buffer)))
+         (name (buffer-name buf)))
+    (when (string-match "^\\*Claude Chat: \\(.+\\)\\*$" name)
+      (get-buffer (match-string 1 name)))))
+
 
 (provide 'claude)
-
 ;;; claude.el ends here
