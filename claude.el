@@ -108,26 +108,30 @@ This function is called by the `after-change-functions` hook."
     (goto-char begin)
     (while (re-search-forward "^data: " end t)
       (let* ((start (point))
-             (end (line-end-position))
-             (json-object-type 'plist)
-             (json-array-type 'vector)
-             (json-key-type 'keyword)
-             (data (json-read-from-string (buffer-substring-no-properties start end))))
-        (cond
-         ((plist-get data :delta)
-          (when-let* ((delta (plist-get data :delta))
-                      (type (plist-get delta :type))
-                      (text (plist-get delta :text))
-                      ((string= type "text_delta")))
-            (if claude-rewrite-region
-                (claude-stream-rewrite-region text)
-              (with-current-buffer claude-rewrite-buffer
-                (save-excursion
-                  (goto-char (point-max))
-                  (insert text))))))
-         ((plist-get data :type)
-          (when (string= (plist-get data :type) "message_stop")
-            (claude-finish-response))))))))
+             (line-end (line-end-position))
+             (line-text (buffer-substring-no-properties start line-end)))
+        ;; Only process if we have a complete line
+        (when (and (> (length line-text) 0)
+                   (string-match-p "\n" (buffer-substring-no-properties line-end (min (+ line-end 1) (point-max)))))
+          (let* ((json-object-type 'plist)
+                 (json-array-type 'vector)
+                 (json-key-type 'keyword)
+                 (data (json-read-from-string line-text)))
+            (cond
+             ((plist-get data :delta)
+              (when-let* ((delta (plist-get data :delta))
+                          (type (plist-get delta :type))
+                          (text (plist-get delta :text))
+                          ((string= type "text_delta")))
+                (if claude-rewrite-region
+                    (claude-stream-rewrite-region text)
+                  (with-current-buffer claude-rewrite-buffer
+                    (save-excursion
+                      (goto-char (point-max))
+                      (insert text))))))
+             ((plist-get data :type)
+              (when (string= (plist-get data :type) "message_stop")
+                (claude-finish-response))))))))))
 
 (defun claude-finish-response ()
   "Finish processing the response.
