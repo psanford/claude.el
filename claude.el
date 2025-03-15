@@ -18,7 +18,7 @@
   :type 'string
   :group 'claude)
 
-(defcustom claude-model "claude-3-5-sonnet-latest"
+(defcustom claude-model "claude-3-7-sonnet-latest"
   "The Claude model to use for chat."
   :type 'string
   :group 'claude)
@@ -70,6 +70,7 @@ If IS-CODE-REWRITE is non-nil, use a system prompt for code rewriting."
           `(("Content-Type" . "application/json")
             ("x-api-key" . ,claude-api-key)
             ("anthropic-version" . "2023-06-01")
+            ("anthropic-beta" . "output-128k-2025-02-19,max-tokens-3-5-sonnet-2024-07-15")
             ("Accept" . "text/event-stream")))
          (system-prompt
           (if is-code-rewrite
@@ -226,7 +227,7 @@ If called from a chat buffer, continues the conversation in that buffer."
   (interactive)
   (when claude-current-request
     (url-cookie-delete-internal (current-url-cookie-string))
-    (kill-buffer (process-buffer claude-current-request))
+    ;; (kill-buffer (process-buffer claude-current-request))
     (delete-process claude-current-request)
     (setq claude-current-request nil)
     (setq claude-rewrite-region nil)
